@@ -82,15 +82,6 @@ cd /path/to/job-handler
 go test ./... -v
 ```
 
-Race detector note (platform-specific):
-- The Go race detector (`-race`) requires CGO. On Windows you may need to enable CGO (`CGO_ENABLED=1`) and have a C toolchain available. Example on PowerShell:
-
-```powershell
-$env:CGO_ENABLED=1; go test ./... -race -v
-```
-
-If you don't have CGO available on Windows, run tests without `-race` or run CI on Linux to use the race detector.
-
 ### Test speed
 
 Unit tests in `worker` use a package-level variable `processJobDelay` to simulate processing time. Tests set this to a small value in `TestMain` so the suite runs quickly. If you change processing timing for local debugging, be aware tests rely on a short delay.

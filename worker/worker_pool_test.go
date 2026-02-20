@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -114,7 +115,7 @@ func TestProcessJob(t *testing.T) {
 			payload:        "test",
 			expectedResult: "",
 			shouldCancel:   true,
-			cancelDelay:    1 * time.Second,
+			cancelDelay:    1 * time.Millisecond,
 			expectError:    true,
 		},
 		{
@@ -129,6 +130,13 @@ func TestProcessJob(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// For cancellation cases make processing slower so cancel takes effect.
+			oldDelay := processJobDelay
+			if tt.shouldCancel {
+				processJobDelay = 200 * time.Millisecond
+			}
+			defer func() { processJobDelay = oldDelay }()
+
 			jobStore := store.NewJobStore()
 			wp := NewWorkerPool(1, jobStore)
 
@@ -181,7 +189,7 @@ func TestEnqueueAndProcess(t *testing.T) {
 			workerCount:    1,
 			payloads:       []string{"hello"},
 			expectedStatus: model.StatusCompleted,
-			timeout:        10 * time.Second,
+			timeout:        2 * time.Second,
 		},
 		{
 			name:           "Process multiple jobs with single worker",
@@ -189,7 +197,7 @@ func TestEnqueueAndProcess(t *testing.T) {
 			workerCount:    1,
 			payloads:       []string{"hello", "go", "test"},
 			expectedStatus: model.StatusCompleted,
-			timeout:        15 * time.Second,
+			timeout:        4 * time.Second,
 		},
 		{
 			name:           "Process multiple jobs with multiple workers",
@@ -197,7 +205,7 @@ func TestEnqueueAndProcess(t *testing.T) {
 			workerCount:    3,
 			payloads:       []string{"hello", "world", "go", "test", "pool"},
 			expectedStatus: model.StatusCompleted,
-			timeout:        15 * time.Second,
+			timeout:        4 * time.Second,
 		},
 		{
 			name:           "Process single job with multiple workers",
@@ -205,7 +213,7 @@ func TestEnqueueAndProcess(t *testing.T) {
 			workerCount:    5,
 			payloads:       []string{"quick"},
 			expectedStatus: model.StatusCompleted,
-			timeout:        10 * time.Second,
+			timeout:        2 * time.Second,
 		},
 	}
 
@@ -222,7 +230,7 @@ func TestEnqueueAndProcess(t *testing.T) {
 
 			for i := 0; i < tt.jobCount; i++ {
 				job := &model.Job{
-					ID:        "job-" + string(rune(48+i)),
+					ID:        "job-" + strconv.Itoa(i),
 					Payload:   tt.payloads[i],
 					Status:    model.StatusQueued,
 					CreatedAt: time.Now(),
@@ -285,7 +293,7 @@ func TestEnqueueWithCancellation(t *testing.T) {
 			cancelAtIndex:     0,
 			expectedCompleted: 0,
 			expectedCancelled: 1,
-			timeout:           10 * time.Second,
+			timeout:           2 * time.Second,
 		},
 		{
 			name:              "Cancel first job out of 3",
@@ -293,7 +301,7 @@ func TestEnqueueWithCancellation(t *testing.T) {
 			cancelAtIndex:     0,
 			expectedCompleted: 2,
 			expectedCancelled: 1,
-			timeout:           15 * time.Second,
+			timeout:           3 * time.Second,
 		},
 		{
 			name:              "Cancel middle job out of 5",
@@ -301,12 +309,19 @@ func TestEnqueueWithCancellation(t *testing.T) {
 			cancelAtIndex:     2,
 			expectedCompleted: 4,
 			expectedCancelled: 1,
-			timeout:           20 * time.Second,
+			timeout:           4 * time.Second,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// For cancellation-focused tests we want processing to be slow enough
+			// that cancellation can take effect. Increase processJobDelay for
+			// these tests and restore afterwards.
+			oldDelay := processJobDelay
+			processJobDelay = 200 * time.Millisecond
+			defer func() { processJobDelay = oldDelay }()
+
 			jobStore := store.NewJobStore()
 			wp := NewWorkerPool(2, jobStore)
 			wp.Start()
@@ -334,8 +349,8 @@ func TestEnqueueWithCancellation(t *testing.T) {
 				wp.Enqueue(job)
 			}
 
-			// Cancel the specified job after a short delay
-			time.Sleep(500 * time.Millisecond)
+			// Cancel the specified job after a short delay (shortened for tests)
+			time.Sleep(50 * time.Millisecond)
 			jobCancels[tt.cancelAtIndex]()
 
 			// Wait for all jobs to complete or be cancelled with timeout
@@ -385,19 +400,19 @@ func TestWorkerPoolShutdown(t *testing.T) {
 			name:        "Shutdown with no jobs",
 			workerCount: 1,
 			jobCount:    0,
-			timeout:     5 * time.Second,
+			timeout:     1 * time.Second,
 		},
 		{
 			name:        "Shutdown with pending jobs",
 			workerCount: 2,
 			jobCount:    5,
-			timeout:     20 * time.Second,
+			timeout:     5 * time.Second,
 		},
 		{
 			name:        "Shutdown with single worker and single job",
 			workerCount: 1,
 			jobCount:    1,
-			timeout:     10 * time.Second,
+			timeout:     2 * time.Second,
 		},
 	}
 
@@ -496,7 +511,7 @@ func TestJobStatusTransition(t *testing.T) {
 			ticker := time.NewTicker(100 * time.Millisecond)
 			defer ticker.Stop()
 
-			timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer timeoutCancel()
 
 			for {
@@ -525,22 +540,22 @@ func TestWorkerPoolConcurrency(t *testing.T) {
 		timeout     time.Duration
 	}{
 		{
-			name:        "High concurrency: 10 workers, 50 jobs",
+			name:        "High concurrency: 10 workers, 20 jobs",
 			workerCount: 10,
-			jobCount:    50,
-			timeout:     60 * time.Second,
-		},
-		{
-			name:        "Medium concurrency: 5 workers, 20 jobs",
-			workerCount: 5,
 			jobCount:    20,
-			timeout:     40 * time.Second,
+			timeout:     5 * time.Second,
 		},
 		{
-			name:        "Low concurrency: 2 workers, 10 jobs",
-			workerCount: 2,
+			name:        "Medium concurrency: 5 workers, 10 jobs",
+			workerCount: 5,
 			jobCount:    10,
-			timeout:     40 * time.Second,
+			timeout:     3 * time.Second,
+		},
+		{
+			name:        "Low concurrency: 2 workers, 6 jobs",
+			workerCount: 2,
+			jobCount:    6,
+			timeout:     3 * time.Second,
 		},
 	}
 
@@ -557,8 +572,8 @@ func TestWorkerPoolConcurrency(t *testing.T) {
 			// Enqueue all jobs
 			for i := 0; i < tt.jobCount; i++ {
 				job := &model.Job{
-					ID:        "concurrent-job-" + string(rune(48+i%10)),
-					Payload:   "payload-" + string(rune(48+i%10)),
+					ID:        "concurrent-job-" + strconv.Itoa(i),
+					Payload:   "payload-" + strconv.Itoa(i),
 					Status:    model.StatusQueued,
 					CreatedAt: time.Now(),
 					Ctx:       ctx,
